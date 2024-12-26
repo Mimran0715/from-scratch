@@ -1,6 +1,4 @@
 import torch.nn as nn
-import torchtext
-from torchtext.data import get_tokenizer
 import torch
 import torch.optim as optim
 import torch.utils.data as data
@@ -23,7 +21,7 @@ class PositionalEncoding(nn.Module):
         pe[:, 0, 1::2] = torch.cos(position * div_term)
         self.register_buffer('pe', pe)
 
-    def forward(self, x: Tensor) -> Tensor:
+    def forward(self, x):
         """
         Arguments:
             x: Tensor, shape ``[seq_len, batch_size, embedding_dim]``
@@ -31,8 +29,6 @@ class PositionalEncoding(nn.Module):
         x = x + self.pe[:x.size(0)]
         return x
         #return self.dropout(x)
-
-# end
 
 class MultiHeadAttention(nn.Module):
     def __init__(self, d_model,num_heads):
@@ -52,6 +48,8 @@ class MultiHeadAttention(nn.Module):
         attn_scores = torch.matmul(Q, K.transpose(-2, -1)) / math.sqrt(self.d_k)
         
         if mask is not None:
+            #print(mask.size())
+            #mask = mask.unsqueeze(1).unsqueeze(2)
             attn_scores = attn_scores.masked_fill(mask == 0, -1e9)
         
         attn_probs = torch.softmax(attn_scores, dim=-1)
@@ -71,13 +69,13 @@ class MultiHeadAttention(nn.Module):
         K = self.split_heads(self.W_k(K))   
         V = self.split_heads(self.W_v(V))   
 
-        attn_output = self.scaled_dot_product_attention(self, Q, K, V, mask)
+        attn_output = self.scaled_dot_product_attention(Q, K, V, mask)
         output = self.W_o(self.combine_heads(attn_output))
 
         return output
     
 class PositionWiseFeedForward(nn.Module):
-    def __init_(self, d_model, d_ff):
+    def __init__(self, d_model, d_ff):
         super(PositionWiseFeedForward, self).__init__()
         self.fc1 = nn.Linear(d_model, d_ff)
         self.fc2 = nn.Linear(d_ff, d_model)
@@ -88,11 +86,11 @@ class PositionWiseFeedForward(nn.Module):
         return self.fc2(self.relu(self.fc1(x)))
 
 class DecoderLayer(nn.Module):
-    def __init__(self, d_model, num_heads, dff, dropout=0.2):
+    def __init__(self, d_model, num_heads, d_ff, dropout=0.2):
         super(DecoderLayer, self).__init__()
         self.self_attn = nn.MultiheadAttention(d_model, num_heads)
         self.cross_attn = nn.MultiheadAttention(d_model, num_heads)
-        self.feed_forward = []
+        self.feed_forward = PositionWiseFeedForward(d_model, d_ff)
         self.norm1 = nn.LayerNorm(d_model)
         self.norm2 = nn.LayerNorm(d_model)
         self.norm3 = nn.LayerNorm(d_model)
@@ -124,12 +122,11 @@ class EncoderLayer(nn.Module):
         x = self.norm2(x + self.dropout(ff_output))
         return x
     
-
 class Transformer(nn.Module):
 
     def __init__(self, src_vocab_size, tgt_vocab_size, d_model, num_heads, 
                  num_layers, d_ff, max_seq_length, dropout=0.2):
-        super(Transformer, self).__init__(self)
+        super(Transformer, self).__init__()
         self.encoder_embedding = nn.Embedding(src_vocab_size, d_model)
         self.decoder_embedding = nn.Embedding(tgt_vocab_size, d_model)
         self.positional_encoding = PositionalEncoding(d_model, dropout, max_seq_length)
@@ -144,14 +141,39 @@ class Transformer(nn.Module):
         src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
         tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(3)
         seq_length = tgt.size(1)
-
         nopeak_mask = (1 - torch.triu(torch.ones(1, seq_length, seq_length), diagonal=1)).bool()
         tgt_mask = tgt_mask & nopeak_mask
-
         return src_mask, tgt_mask
+        # #src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
+        # # tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(3)
+
+        # src_mask = (src != 0)
+        # #tgt_mask = (tgt != 0)
+        # padding_mask = (tgt != 0)
+
+        # seq_length = tgt.size(1)
+
+        # nopeak_mask = (1 - torch.triu(torch.ones(1, seq_length, seq_length), diagonal=1)).bool()
+        # print(f'generated noeakr mask: {nopeak_mask.size()}')
+
+        # print(f'generated padding mask: {padding_mask.size()}')
+        # print(f'generated padding mask: {padding_mask.unsqueeze(1).size()}')
+        
+        # tgt_mask = padding_mask.unsqueeze(1) & nopeak_mask
+
+        # #tgt_mask = nopeak_mask.unsqueeze(0) & padding_mask.unsqueeze(1)
+
+
+        # print(f'generated Src mask: {src_mask.size()}')
+        # print(f'generated Tgt mask: {tgt_mask.size()}')
+
+        # return src_mask, tgt_mask
 
     def forward(self, src, tgt):
         src_mask, tgt_mask = self.generate_mask(src, tgt)
+
+        print(f"transformer forward src_mask : {src_mask.size()}")
+        print(f"transformer forward tgt_mask : {tgt_mask.size()}")
         src_embedded = self.dropout(self.positional_encoding(self.encoder_embedding(src)))
         tgt_embedded = self.dropout(self.positional_encoding(self.decoder_embedding(tgt)))
         
@@ -165,7 +187,6 @@ class Transformer(nn.Module):
 
         output = self.fc(dec_output)   
         return output
-
 
 def test_transformer():
     src_vocab_size = 5000
