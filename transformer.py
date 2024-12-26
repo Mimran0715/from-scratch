@@ -7,7 +7,9 @@ import torch.utils.data as data
 import math
 import copy
 
-# implementation taken from PyTorch Documentation 
+# implementation taken from PyTorch Documentation / Datacamp
+# https://www.datacamp.com/tutorial/building-a-transformer-with-py-torch
+
 class PositionalEncoding(nn.Module):
 
     def __init__(self, d_model: int, dropout: float = 0.1, max_len: int = 5000):
@@ -139,18 +141,33 @@ class Transformer(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def generate_mask(self, src, tgt):
-        pass
+        src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
+        tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(3)
+        seq_length = tgt.size(1)
+
+        nopeak_mask = (1 - torch.triu(torch.ones(1, seq_length, seq_length), diagonal=1)).bool()
+        tgt_mask = tgt_mask & nopeak_mask
+
+        return src_mask, tgt_mask
 
     def forward(self, src, tgt):
-        pass
+        src_mask, tgt_mask = self.generate_mask(src, tgt)
+        src_embedded = self.dropout(self.positional_encoding(self.encoder_embedding(src)))
+        tgt_embedded = self.dropout(self.positional_encoding(self.decoder_embedding(tgt)))
+        
+        enc_output = src_embedded
+        for enc_layer in self.encoder_layers:
+            enc_output = enc_layer(enc_output, src_mask)
+
+        dec_output = tgt_embedded
+        for dec_layer in self.decoder_layers:
+            dec_output = dec_layer(dec_output, enc_output, src_mask, tgt_mask)
+
+        output = self.fc(dec_output)   
+        return output
 
 
 def test_transformer():
-
-    # tokenizer = get_tokenizer("basic_english")
-    # tokens = tokenizer("You can now install TorchText using pip!")
-    # print(tokens)
-
     src_vocab_size = 5000
     tgt_vocab_size = 5000
     d_model = 512
