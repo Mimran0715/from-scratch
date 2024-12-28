@@ -96,12 +96,31 @@ class DecoderLayer(nn.Module):
         self.norm3 = nn.LayerNorm(d_model)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, enc_output, src_mask, tgt_mask):
-        attn_output = self.self_attn(x, x, x, tgt_mask)
+    # def forward(self, x, enc_output, src_mask, tgt_mask):
+    #     attn_output = self.self_attn(x, x, x, tgt_mask)
+    #     x = self.norm1(x + self.dropout(attn_output))
+    #     attn_output = self.cross_attn(x, enc_output, enc_output, src_mask)
+    #     x = self.norm2(x + self.dropout(attn_output))
+    #     ff_output = self.ffn(x)
+    #     x = self.norm3(x + self.dropout(ff_output))
+    #     return x
+
+
+    def forward(self, x, enc_output, src_padding_mask, tgt_padding_mask, tgt_causal_mask):
+        # Self-attention with causal and padding masks
+        attn_output, _ = self.self_attn(
+            x, x, x, attn_mask=tgt_causal_mask, key_padding_mask=~tgt_padding_mask
+        )
         x = self.norm1(x + self.dropout(attn_output))
-        attn_output = self.cross_attn(x, enc_output, enc_output, src_mask)
+
+        # Cross-attention with src padding mask
+        attn_output, _ = self.cross_attn(
+            x, enc_output, enc_output, key_padding_mask=~src_padding_mask
+        )
         x = self.norm2(x + self.dropout(attn_output))
-        ff_output = self.ffn(x)
+
+        # Feed-forward
+        ff_output = self.feed_forward(x)
         x = self.norm3(x + self.dropout(ff_output))
         return x
 
@@ -121,7 +140,7 @@ class EncoderLayer(nn.Module):
         ff_output = self.feed_forward(x)
         x = self.norm2(x + self.dropout(ff_output))
         return x
-    
+
 class Transformer(nn.Module):
 
     def __init__(self, src_vocab_size, tgt_vocab_size, d_model, num_heads, 
@@ -136,54 +155,66 @@ class Transformer(nn.Module):
 
         self.fc = nn.Linear(d_model, tgt_vocab_size)
         self.dropout = nn.Dropout(dropout)
+        self.num_heads = num_heads
 
     def generate_mask(self, src, tgt):
+        src_mask = (src != 0)
+        #tgt_mask = (tgt != 0)
+
+        #print(f'SRC_MASK og {src_mask.size()}')
+        #print(f'TGT_MASK og {tgt_mask.size()}')
+
+        tgt_padding_mask = (tgt != 0)
+
         src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
-        tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(3)
+        tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(2)
+        #tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(3) # OG
+
+        #print(f'SRC_MASK unsqueeze {src_mask.size()}')
+        #print(f'TGT_MASK unsqueeze {tgt_mask.size()}')
+
         seq_length = tgt.size(1)
         nopeak_mask = (1 - torch.triu(torch.ones(1, seq_length, seq_length), diagonal=1)).bool()
-        tgt_mask = tgt_mask & nopeak_mask
+       
+        #print(f'NOPEAK_MASK {nopeak_mask.size()}')
+       
+        #tgt_mask = tgt_mask & nopeak_mask
+        #tgt_mask = nopeak_mask  # Use this for attn_mask
+
+        #attn_mask = nopeak_mask.unsqueeze(0).repeat(self.num_heads, 1, 1)
+        attn_mask = nopeak_mask.unsqueeze(0).expand(self.num_heads, -1, -1)
+        return src_mask, tgt_padding_mask, attn_mask
+
+        #print(f'TGT_MASK & NOPEAK_MASK {tgt_mask.size()}')
+
         return src_mask, tgt_mask
-        # #src_mask = (src != 0).unsqueeze(1).unsqueeze(2)
-        # # tgt_mask = (tgt != 0).unsqueeze(1).unsqueeze(3)
-
-        # src_mask = (src != 0)
-        # #tgt_mask = (tgt != 0)
-        # padding_mask = (tgt != 0)
-
-        # seq_length = tgt.size(1)
-
-        # nopeak_mask = (1 - torch.triu(torch.ones(1, seq_length, seq_length), diagonal=1)).bool()
-        # print(f'generated noeakr mask: {nopeak_mask.size()}')
-
-        # print(f'generated padding mask: {padding_mask.size()}')
-        # print(f'generated padding mask: {padding_mask.unsqueeze(1).size()}')
-        
-        # tgt_mask = padding_mask.unsqueeze(1) & nopeak_mask
-
-        # #tgt_mask = nopeak_mask.unsqueeze(0) & padding_mask.unsqueeze(1)
-
-
-        # print(f'generated Src mask: {src_mask.size()}')
-        # print(f'generated Tgt mask: {tgt_mask.size()}')
-
-        # return src_mask, tgt_mask
 
     def forward(self, src, tgt):
-        src_mask, tgt_mask = self.generate_mask(src, tgt)
+        #src_mask, tgt_mask = self.generate_mask(src, tgt)
 
-        print(f"transformer forward src_mask : {src_mask.size()}")
-        print(f"transformer forward tgt_mask : {tgt_mask.size()}")
+        src_mask, tgt_padding_mask, tgt_causal_mask = self.generate_mask(src, tgt)
+
+        #src_mask_dec = src_mask.squeeze(1).squeeze(1)
+        #tgt_mask_dec = tgt_mask.squeeze(1).squeeze(1)
+
+        #print(f"transformer forward src_mask : {src_mask.size()}")
+        #print(f"transformer forward tgt_mask : {tgt_mask.size()}")
+
         src_embedded = self.dropout(self.positional_encoding(self.encoder_embedding(src)))
         tgt_embedded = self.dropout(self.positional_encoding(self.decoder_embedding(tgt)))
         
         enc_output = src_embedded
         for enc_layer in self.encoder_layers:
+            print(f'Adding encoder layer...')
             enc_output = enc_layer(enc_output, src_mask)
 
         dec_output = tgt_embedded
         for dec_layer in self.decoder_layers:
-            dec_output = dec_layer(dec_output, enc_output, src_mask, tgt_mask)
+            print(f'Adding decoder layer...')
+            #print(f'Adding decoder layer... src_mask {src_mask_dec.size()}, tgt_mask {tgt_mask_dec.size()}')
+            #dec_output = dec_layer(dec_output, enc_output,src_mask_dec, tgt_mask_dec)
+            #dec_output = dec_layer(dec_output, enc_output,src_mask, tgt_mask)
+            dec_output = dec_layer(dec_output, enc_output,src_mask, tgt_padding_mask, tgt_causal_mask)
 
         output = self.fc(dec_output)   
         return output
